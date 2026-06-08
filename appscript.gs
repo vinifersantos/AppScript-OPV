@@ -105,31 +105,33 @@ function BP_criarMenuBoletos_() {
 const LA_ABA_LANCAMENTOS = 'LANÇAMENTOS';
 const LA_ABA_CONFIG = 'CONFIG';
 
-const LA_PRIMEIRA_LINHA_DADOS = 21;
+const LA_PRIMEIRA_LINHA_DADOS = 20;
 const LA_ULTIMA_LINHA_DADOS = 5000;
 const LA_TOTAL_LINHAS_DADOS = LA_ULTIMA_LINHA_DADOS - LA_PRIMEIRA_LINHA_DADOS + 1;
 const LA_TOTAL_LINHAS_LISTAS = LA_ULTIMA_LINHA_DADOS - 1;
 
 const LA_COLUNAS_LANCAMENTO = Object.freeze({
   ID: 1,
-  DATA: 2,
-  MES: 3,
-  UNIDADE: 5,
-  TIPO: 6,
-  CATEGORIA: 7,
-  SUBCATEGORIA: 8,
-  DESCRICAO: 9,
-  VALOR: 10,
-  FORMA_PGTO: 11,
-  STATUS: 12,
-  DATA_PGTO: 13,
-  OBSERVACOES: 14,
-  CRIADO_EM: 15,
-  EXCLUIR: 16,
-  CHAVE_TECNICA: 17,
-  LISTA_TIPOS: 19,
-  LISTA_CATEGORIAS: 20,
-  LISTA_FORMAS_PGTO: 22
+  DATA: 2,         // B
+  MES: 3,          // C
+  MES_NUM: 4,      // D — fórmula, não sobrescrever
+  UNIDADE: 5,      // E
+  TIPO: 6,         // F
+  CATEGORIA: 7,    // G
+  SUBCATEGORIA: 8, // H
+  VALOR: 9,        // I
+  FORMA_PGTO: 10,  // J
+  STATUS: 11,      // K
+  DATA_PGTO: 12,   // L
+  OBSERVACOES: 13, // M
+  CRIADO_EM: 14,   // N
+  EXCLUIR: 15,     // O
+  CHAVE_TECNICA: 16, // P
+  CLASSE_TIPO: 90, // CL — fórmula, não sobrescrever
+  LISTA_TIPOS: 18,       // R
+  LISTA_CATEGORIAS: 19,  // S
+  LISTA_STATUS: 20,      // T
+  LISTA_FORMAS_PGTO: 21  // U
 });
 
 const LA_INTERVALOS_FORMULARIO = Object.freeze({
@@ -140,7 +142,6 @@ const LA_INTERVALOS_FORMULARIO = Object.freeze({
   TIPO: 'frmTipoLancamento',
   CATEGORIA: 'frmCategoria',
   SUBCATEGORIA: 'frmSubcategoria',
-  DESCRICAO: 'frmDescricao',
   VALOR: 'frmValor',
   FORMA_PGTO: 'frmFormaPgto',
   STATUS: 'frmStatus',
@@ -163,7 +164,6 @@ const LA_INTERVALOS_DADOS_FORMULARIO = [
   LA_INTERVALOS_FORMULARIO.TIPO,
   LA_INTERVALOS_FORMULARIO.CATEGORIA,
   LA_INTERVALOS_FORMULARIO.SUBCATEGORIA,
-  LA_INTERVALOS_FORMULARIO.DESCRICAO,
   LA_INTERVALOS_FORMULARIO.VALOR,
   LA_INTERVALOS_FORMULARIO.FORMA_PGTO,
   LA_INTERVALOS_FORMULARIO.STATUS,
@@ -174,10 +174,6 @@ const LA_INTERVALOS_DADOS_FORMULARIO = [
 const LA_CLASSES_RELATORIO = [
   'Faturamento',
   'Despesa',
-  'Indicador',
-  'Forma de Pagamento',
-  'Em Aberto',
-  'Desconto',
   'Ignorar'
 ];
 
@@ -293,7 +289,6 @@ function LA_lerLancamentoDoFormulario_(spreadsheet, namedRangeMap) {
     tipo: LA_normalizarTexto_(values[LA_INTERVALOS_FORMULARIO.TIPO]),
     categoria: LA_normalizarTexto_(values[LA_INTERVALOS_FORMULARIO.CATEGORIA]),
     subcategoria: LA_normalizarTexto_(values[LA_INTERVALOS_FORMULARIO.SUBCATEGORIA]),
-    descricao: LA_normalizarTexto_(values[LA_INTERVALOS_FORMULARIO.DESCRICAO]),
     valor: LA_parseValor_(values[LA_INTERVALOS_FORMULARIO.VALOR]),
     formaPgto: LA_normalizarTexto_(values[LA_INTERVALOS_FORMULARIO.FORMA_PGTO]),
     status: LA_normalizarTexto_(values[LA_INTERVALOS_FORMULARIO.STATUS]) || 'Pendente',
@@ -330,6 +325,13 @@ function LA_validarLancamento_(lancamento, configIndex) {
 
   if (!Number.isFinite(lancamento.valor)) {
     erros.push('Informe um Valor numérico válido.');
+  }
+
+  if (lancamento.formaPgto && LA_equalsTexto_(lancamento.formaPgto, 'Taxas Getnet')) {
+    erros.push(
+      '"Taxas Getnet" não é uma Forma de Pagamento válida.\n' +
+      'Registre como: Despesa > Despesas Financeiras > Taxas Getnet.'
+    );
   }
 
   if (LA_campoPreenchido_(lancamento.dataPgtoRaw) && !lancamento.dataPgto) {
@@ -372,32 +374,37 @@ function LA_escreverLancamento_(sheet, row, lancamento) {
     lancamento.valor
   );
 
+  // B:C — data e mês (A e D são fórmulas, não sobrescrever)
   sheet
     .getRange(row, LA_COLUNAS_LANCAMENTO.DATA, 1, 2)
     .setValues([[lancamento.data, lancamento.mes]]);
 
+  // E:O — 11 colunas de dados (col 5 a 15)
   sheet
     .getRange(
       row,
       LA_COLUNAS_LANCAMENTO.UNIDADE,
       1,
-      LA_COLUNAS_LANCAMENTO.CHAVE_TECNICA - LA_COLUNAS_LANCAMENTO.UNIDADE + 1
+      LA_COLUNAS_LANCAMENTO.EXCLUIR - LA_COLUNAS_LANCAMENTO.UNIDADE + 1
     )
     .setValues([[
       lancamento.unidade,
       lancamento.tipo,
       lancamento.categoria,
       lancamento.subcategoria,
-      lancamento.descricao,
       lancamento.valor,
       lancamento.formaPgto,
       lancamento.status,
       lancamento.dataPgto || '',
       lancamento.obs,
       lancamento.criadoEm,
-      false,
-      chaveTecnica
+      false
     ]]);
+
+  // P — chave de duplicidade
+  sheet
+    .getRange(row, LA_COLUNAS_LANCAMENTO.CHAVE_TECNICA)
+    .setValue(chaveTecnica);
 
   LA_aplicarFormatosLinhaLancamento_(sheet, row);
 }
@@ -468,7 +475,7 @@ function excluirLancamentosMarcados() {
       LA_agruparLinhasConsecutivas_(rowsToClear).forEach(function (grupo) {
         rangesParaLimpar.push(
           APP_a1Range_(grupo.inicio, LA_COLUNAS_LANCAMENTO.DATA, grupo.quantidade, 2),
-          APP_a1Range_(grupo.inicio, LA_COLUNAS_LANCAMENTO.UNIDADE, grupo.quantidade, 11),
+          APP_a1Range_(grupo.inicio, LA_COLUNAS_LANCAMENTO.UNIDADE, grupo.quantidade, LA_COLUNAS_LANCAMENTO.CRIADO_EM - LA_COLUNAS_LANCAMENTO.UNIDADE + 1),
           APP_a1Range_(grupo.inicio, LA_COLUNAS_LANCAMENTO.CHAVE_TECNICA, grupo.quantidade, 1)
         );
 
@@ -750,37 +757,17 @@ function LA_rebuildListasVisiveis_() {
     data.map(function (row) { return row[1]; }).filter(Boolean)
   );
 
-  const formasPgtoConfig = data
-    .filter(function (row) { return LA_equalsTexto_(row[0], 'Forma de Pagamento'); })
-    .map(function (row) { return row[2] || row[1]; })
-    .filter(Boolean);
-
-  const formasPgtoUsadas = lanc
-    .getRange(
-      LA_PRIMEIRA_LINHA_DADOS,
-      LA_COLUNAS_LANCAMENTO.FORMA_PGTO,
-      LA_TOTAL_LINHAS_DADOS,
-      1
-    )
-    .getValues()
-    .flat()
-    .filter(Boolean);
-
-  const formasPgto = LA_uniquePreserveOrder_(
-    formasPgtoConfig.concat(formasPgtoUsadas)
-  );
+  // Formas de pagamento e Status são ranges fixos na planilha (U e T); não gerenciados aqui.
 
   lanc
     .getRangeList([
       APP_a1Range_(2, LA_COLUNAS_LANCAMENTO.LISTA_TIPOS, LA_TOTAL_LINHAS_LISTAS, 1),
-      APP_a1Range_(2, LA_COLUNAS_LANCAMENTO.LISTA_CATEGORIAS, LA_TOTAL_LINHAS_LISTAS, 1),
-      APP_a1Range_(2, LA_COLUNAS_LANCAMENTO.LISTA_FORMAS_PGTO, LA_TOTAL_LINHAS_LISTAS, 1)
+      APP_a1Range_(2, LA_COLUNAS_LANCAMENTO.LISTA_CATEGORIAS, LA_TOTAL_LINHAS_LISTAS, 1)
     ])
     .clearContent();
 
   LA_escreverListaVertical_(lanc, LA_COLUNAS_LANCAMENTO.LISTA_TIPOS, tipos);
   LA_escreverListaVertical_(lanc, LA_COLUNAS_LANCAMENTO.LISTA_CATEGORIAS, categorias);
-  LA_escreverListaVertical_(lanc, LA_COLUNAS_LANCAMENTO.LISTA_FORMAS_PGTO, formasPgto);
 
   LA_setNamedRangesSafe_([
     {
@@ -790,10 +777,6 @@ function LA_rebuildListasVisiveis_() {
     {
       name: 'rngCategoriasLancamento',
       range: lanc.getRange(2, LA_COLUNAS_LANCAMENTO.LISTA_CATEGORIAS, LA_TOTAL_LINHAS_LISTAS, 1)
-    },
-    {
-      name: 'rngFormasPgtoLancamento',
-      range: lanc.getRange(2, LA_COLUNAS_LANCAMENTO.LISTA_FORMAS_PGTO, LA_TOTAL_LINHAS_LISTAS, 1)
     }
   ]);
 }
