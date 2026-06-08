@@ -68,9 +68,13 @@ function LA_criarMenuLancamentos_() {
     .createMenu('Lançamentos')
     .addItem('Registrar lançamento', 'registrarLancamento')
     .addItem('Excluir lançamentos marcados', 'excluirLancamentosMarcados')
+    .addItem('Desfazer última exclusão', 'desfazerUltimaExclusao')
     .addSeparator()
     .addItem('Adicionar item às listas', 'adicionarItemAsListas')
     .addItem('Limpar formulário', 'limparFormulario')
+    .addSeparator()
+    .addItem('Validar estrutura da planilha', 'validarEstruturaLancamentos')
+    .addItem('Backup agora', 'fazerBackupDrive')
     .addToUi();
 }
 
@@ -379,13 +383,13 @@ function LA_escreverLancamento_(sheet, row, lancamento) {
     .getRange(row, LA_COLUNAS_LANCAMENTO.DATA, 1, 2)
     .setValues([[lancamento.data, lancamento.mes]]);
 
-  // E:O — 11 colunas de dados (col 5 a 15)
+  // E:P — dados + chave em uma única chamada (col 5 a 16)
   sheet
     .getRange(
       row,
       LA_COLUNAS_LANCAMENTO.UNIDADE,
       1,
-      LA_COLUNAS_LANCAMENTO.EXCLUIR - LA_COLUNAS_LANCAMENTO.UNIDADE + 1
+      LA_COLUNAS_LANCAMENTO.CHAVE_TECNICA - LA_COLUNAS_LANCAMENTO.UNIDADE + 1
     )
     .setValues([[
       lancamento.unidade,
@@ -398,13 +402,9 @@ function LA_escreverLancamento_(sheet, row, lancamento) {
       lancamento.dataPgto || '',
       lancamento.obs,
       lancamento.criadoEm,
-      false
+      false,
+      chaveTecnica
     ]]);
-
-  // P — chave de duplicidade
-  sheet
-    .getRange(row, LA_COLUNAS_LANCAMENTO.CHAVE_TECNICA)
-    .setValue(chaveTecnica);
 
   LA_aplicarFormatosLinhaLancamento_(sheet, row);
 }
@@ -469,6 +469,9 @@ function excluirLancamentosMarcados() {
     if (response !== ui.Button.YES) return;
 
     LA_executarComLockDocumento_(function () {
+      // Salva backup das linhas antes de apagar (para desfazer)
+      LA_salvarBackupExclusao_(sheet, rowsToClear);
+
       const rangesParaLimpar = [];
       const rangesParaDesmarcar = [];
 
@@ -876,8 +879,12 @@ function LA_getConfigValues_(spreadsheet) {
     ? range.getValues()
     : LA_getConfigRowsFromSheet_(LA_obterAbaObrigatoria_(ss, LA_ABA_CONFIG));
 
-  if (values.length > 0 && LA_equalsTexto_(values[0][0], 'Tipo')) {
-    return values.slice(1);
+  if (values.length > 0) {
+    const primeira = LA_chaveTexto_(values[0][0]);
+    // Pula linha de cabeçalho (qualquer variação de "Tipo" ou célula vazia na primeira col)
+    if (primeira === 'tipo' || primeira === 'tipos' || primeira === '') {
+      return values.slice(1);
+    }
   }
 
   return values;
@@ -916,7 +923,14 @@ function LA_executarComLockDocumento_(callback) {
   let lockObtido = false;
 
   try {
-    lock.waitLock(10000);
+    try {
+      lock.waitLock(10000);
+    } catch (e) {
+      throw new Error(
+        'A planilha está sendo usada por outra pessoa ou aba.\n' +
+        'Aguarde alguns segundos e tente novamente.'
+      );
+    }
     lockObtido = true;
     return callback();
   } finally {
@@ -1133,46 +1147,46 @@ function LA_mesPorData_(dateValue) {
 
 
 function LA_proximaLinha_(sheet) {
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow < LA_PRIMEIRA_LINHA_DADOS) return LA_PRIMEIRA_LINHA_DADOS;
+
+  // Lê apenas até a última linha usada + 1 (não lê 4980 linhas desnecessariamente)
+  const numRows = Math.min(lastRow - LA_PRIMEIRA_LINHA_DADOS + 2, LA_TOTAL_LINHAS_DADOS);
+
   const values = sheet
-    .getRange(
-      LA_PRIMEIRA_LINHA_DADOS,
-      LA_COLUNAS_LANCAMENTO.DATA,
-      LA_TOTAL_LINHAS_DADOS,
-      1
-    )
+    .getRange(LA_PRIMEIRA_LINHA_DADOS, LA_COLUNAS_LANCAMENTO.DATA, numRows, 1)
     .getValues();
 
-  const idx = values.findIndex(function (row) {
-    return row[0] === '';
-  });
+  const idx = values.findIndex(function (row) { return row[0] === ''; });
 
-  return idx === -1 ? null : LA_PRIMEIRA_LINHA_DADOS + idx;
+  if (idx !== -1) return LA_PRIMEIRA_LINHA_DADOS + idx;
+
+  return lastRow < LA_ULTIMA_LINHA_DADOS ? lastRow + 1 : null;
 }
 
 
 function LA_existeChaveTecnicaLancamento_(sheet, duplicateKey) {
   if (!duplicateKey) return false;
 
-  const range = sheet.getRange(
-    LA_PRIMEIRA_LINHA_DADOS,
-    LA_COLUNAS_LANCAMENTO.CHAVE_TECNICA,
-    LA_TOTAL_LINHAS_DADOS,
-    1
-  );
+  const lastRow = sheet.getLastRow();
+  if (lastRow < LA_PRIMEIRA_LINHA_DADOS) return false;
 
-  return Boolean(
-    range
-      .createTextFinder(duplicateKey)
-      .matchCase(true)
-      .matchEntireCell(true)
-      .findNext()
-  );
+  const numRows = Math.min(lastRow, LA_ULTIMA_LINHA_DADOS) - LA_PRIMEIRA_LINHA_DADOS + 1;
+
+  const values = sheet
+    .getRange(LA_PRIMEIRA_LINHA_DADOS, LA_COLUNAS_LANCAMENTO.CHAVE_TECNICA, numRows, 1)
+    .getValues();
+
+  return values.some(function (row) { return row[0] === duplicateKey; });
 }
 
 
 function LA_makeKey_(data, unidade, tipo, categoria, subcategoria, valor) {
   const tz = Session.getScriptTimeZone();
-  const dataKey = Utilities.formatDate(new Date(data), tz, 'yyyyMMdd');
+  // Evita reconstruir Date a partir de Date (risco de drift de timezone)
+  const dateObj = data instanceof Date ? data : new Date(data);
+  const dataKey = Utilities.formatDate(dateObj, tz, 'yyyyMMdd');
 
   return [
     dataKey,
@@ -1186,8 +1200,10 @@ function LA_makeKey_(data, unidade, tipo, categoria, subcategoria, valor) {
 
 
 function LA_formatDateKey_(data) {
+  const parsed = LA_parseData_(data);
+  if (!parsed) return '';
   const tz = Session.getScriptTimeZone();
-  return Utilities.formatDate(LA_parseData_(data), tz, 'yyyyMMdd');
+  return Utilities.formatDate(parsed, tz, 'yyyyMMdd');
 }
 
 
@@ -1373,6 +1389,189 @@ function LA_setNamedRangesSafe_(items) {
 function LA_getMensagemErro_(error) {
   if (error && error.message) return error.message;
   return String(error || 'Erro desconhecido.');
+}
+
+
+/****************************************************
+ * DESFAZER ÚLTIMA EXCLUSÃO — LANÇAMENTOS
+ ****************************************************/
+
+function LA_salvarBackupExclusao_(sheet, rows) {
+  try {
+    const numCols = LA_COLUNAS_LANCAMENTO.CHAVE_TECNICA;
+    const dados = rows.map(function (row) {
+      return {
+        row: row,
+        values: sheet.getRange(row, 1, 1, numCols).getValues()[0]
+      };
+    });
+
+    const payload = JSON.stringify({
+      timestamp: new Date().toISOString(),
+      dados: dados
+    });
+
+    if (payload.length > 8000) return; // Não armazena se muito grande
+
+    PropertiesService.getDocumentProperties()
+      .setProperty('LA_ULTIMO_BACKUP_EXCLUSAO', payload);
+  } catch (e) {
+    // Falha silenciosa — não impede a exclusão
+  }
+}
+
+
+function desfazerUltimaExclusao() {
+  LA_executarComErroAmigavel_('Desfazer última exclusão', function () {
+    const ss = SpreadsheetApp.getActive();
+    const ui = SpreadsheetApp.getUi();
+    const sheet = LA_obterAbaObrigatoria_(ss, LA_ABA_LANCAMENTOS);
+
+    const raw = PropertiesService.getDocumentProperties()
+      .getProperty('LA_ULTIMO_BACKUP_EXCLUSAO');
+
+    if (!raw) {
+      ui.alert('Nenhuma exclusão recente encontrada para desfazer.');
+      return;
+    }
+
+    let backup;
+    try {
+      backup = JSON.parse(raw);
+    } catch (e) {
+      ui.alert('O backup da última exclusão está corrompido e não pode ser restaurado.');
+      return;
+    }
+
+    const quando = new Date(backup.timestamp);
+    const formatado = Utilities.formatDate(quando, Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm');
+
+    const response = ui.alert(
+      'Desfazer exclusão',
+      'Restaurar ' + backup.dados.length + ' lançamento(s) excluído(s) em ' + formatado + '?\n\n' +
+      'Os dados serão gravados de volta nas linhas originais.',
+      ui.ButtonSet.YES_NO
+    );
+
+    if (response !== ui.Button.YES) return;
+
+    LA_executarComLockDocumento_(function () {
+      backup.dados.forEach(function (item) {
+        sheet.getRange(item.row, 1, 1, item.values.length).setValues([item.values]);
+      });
+
+      SpreadsheetApp.flush();
+    });
+
+    PropertiesService.getDocumentProperties()
+      .deleteProperty('LA_ULTIMO_BACKUP_EXCLUSAO');
+
+    ss.toast(
+      backup.dados.length + ' lançamento(s) restaurado(s) com sucesso.',
+      'LANÇAMENTOS',
+      5
+    );
+  });
+}
+
+
+/****************************************************
+ * VALIDAR ESTRUTURA — LANÇAMENTOS
+ ****************************************************/
+
+function validarEstruturaLancamentos() {
+  LA_executarComErroAmigavel_('Validar estrutura da planilha', function () {
+    const ss = SpreadsheetApp.getActive();
+    const ui = SpreadsheetApp.getUi();
+
+    const abaLanc = ss.getSheetByName(LA_ABA_LANCAMENTOS);
+    const abaCfg = ss.getSheetByName(LA_ABA_CONFIG);
+
+    const intervalosObrigatorios = LA_INTERVALOS_OBRIGATORIOS_FORMULARIO;
+    const intervalosAusentes = LA_listarIntervalosNomeadosAusentes_(ss, intervalosObrigatorios);
+
+    const checks = [
+      ['Aba LANÇAMENTOS existe', Boolean(abaLanc)],
+      ['Aba CONFIG existe', Boolean(abaCfg)],
+      ['Aba LANÇAMENTOS alcança linha 5000', abaLanc ? abaLanc.getMaxRows() >= LA_ULTIMA_LINHA_DADOS : false],
+      ['CONFIG tem coluna F (ClasseRelatorio)', abaCfg ? abaCfg.getMaxColumns() >= 6 : false],
+      ['Intervalos nomeados obrigatórios existem', intervalosAusentes.length === 0],
+      ['Intervalo frmAreaFormulario existe', Boolean(ss.getRangeByName(LA_INTERVALOS_FORMULARIO.AREA))],
+      ['CONFIG tem dados cadastrados', abaCfg ? abaCfg.getLastRow() > 1 : false],
+      ['Backup de exclusão disponível', Boolean(
+        PropertiesService.getDocumentProperties().getProperty('LA_ULTIMO_BACKUP_EXCLUSAO')
+      )]
+    ];
+
+    const problemas = checks
+      .filter(function (c) { return !c[1]; })
+      .map(function (c) { return '✗ ' + c[0]; });
+
+    const ok = checks
+      .filter(function (c) { return c[1]; })
+      .map(function (c) { return '✓ ' + c[0]; });
+
+    if (problemas.length === 0) {
+      ui.alert(
+        'Estrutura OK',
+        'Todos os ' + ok.length + ' itens verificados estão corretos.\n\n' + ok.join('\n'),
+        ui.ButtonSet.OK
+      );
+      return;
+    }
+
+    const detalheAusentes = intervalosAusentes.length
+      ? '\n\nIntervalos nomeados ausentes:\n' + intervalosAusentes.join('\n')
+      : '';
+
+    ui.alert(
+      'Problemas encontrados',
+      'Itens com problema:\n' + problemas.join('\n') +
+      '\n\nItens OK:\n' + ok.join('\n') +
+      detalheAusentes,
+      ui.ButtonSet.OK
+    );
+  });
+}
+
+
+/****************************************************
+ * BACKUP PARA DRIVE — COMPARTILHADO
+ ****************************************************/
+
+function fazerBackupDrive() {
+  LA_executarComErroAmigavel_('Backup agora', function () {
+    const ss = SpreadsheetApp.getActive();
+    const ui = SpreadsheetApp.getUi();
+    const tz = Session.getScriptTimeZone();
+
+    const response = ui.alert(
+      'Backup agora',
+      'Isso criará uma cópia desta planilha no Google Drive com a data e hora atuais.\n\nDeseja continuar?',
+      ui.ButtonSet.YES_NO
+    );
+
+    if (response !== ui.Button.YES) return;
+
+    const timestamp = Utilities.formatDate(new Date(), tz, 'dd-MM-yyyy HH:mm');
+    const nomeBackup = 'BACKUP ' + timestamp + ' — ' + ss.getName();
+
+    const file = DriveApp.getFileById(ss.getId());
+    const backup = file.makeCopy(nomeBackup);
+
+    ss.toast(
+      'Backup criado: "' + nomeBackup + '"',
+      'Backup',
+      8
+    );
+
+    console.info(JSON.stringify({
+      module: 'BACKUP',
+      arquivo: nomeBackup,
+      fileId: backup.getId(),
+      timestamp: new Date().toISOString()
+    }));
+  });
 }
 
 
@@ -2440,16 +2639,17 @@ function BP_getConfiLists_(sheet) {
     BP_pushIfNotBlank_(lists.status, row[BP_CONFIG.confiColumns.status - 1]);
   });
 
-  try {
-    cache.put(
-      BP_CONFIG.cache.confiKey,
-      JSON.stringify(lists),
-      BP_CONFIG.cache.ttlSeconds
-    );
-  } catch (error) {
-    BP_logWarn_('Cache CONFI excedeu limite ou falhou', {
-      error: BP_getErrorMessage_(error),
-    });
+  const serialized = JSON.stringify(lists);
+
+  // Cache tem limite de 100KB por valor; só armazena se couber
+  if (serialized.length < 90000) {
+    try {
+      cache.put(BP_CONFIG.cache.confiKey, serialized, BP_CONFIG.cache.ttlSeconds);
+    } catch (error) {
+      BP_logWarn_('Cache CONFI falhou ao gravar', {
+        error: BP_getErrorMessage_(error),
+      });
+    }
   }
 
   return lists;
