@@ -648,7 +648,7 @@ function adicionarItemAsListas() {
       ? LA_matchExistingText_(subcategoriaDigitada, subcategoriasDaCategoria)
       : '';
 
-    const duplicado = data.some(function (row) {
+    const linhaDuplicada = data.find(function (row) {
       return (
         LA_equalsTexto_(row[0], tipo) &&
         LA_equalsTexto_(row[1], categoria) &&
@@ -656,15 +656,38 @@ function adicionarItemAsListas() {
       );
     });
 
-    if (duplicado) {
-      ui.alert('Esse Tipo + Categoria + Subcategoria já existe na CONFIG.');
-      return;
-    }
-
     const classeExistente = data
       .filter(function (row) { return LA_equalsTexto_(row[0], tipo); })
       .map(function (row) { return LA_matchClasseRelatorio_(row[5]); })
       .find(Boolean);
+
+    if (linhaDuplicada) {
+      const classeDuplicada = LA_matchClasseRelatorio_(linhaDuplicada[5]) || classeExistente;
+
+      if (!classeDuplicada) {
+        ui.alert('Esse item já existe na CONFIG, mas está sem ClasseRelatorio válida.');
+        return;
+      }
+
+      const refletirExistente = ui.alert(
+        'Item já existe na CONFIG',
+        'Esse Tipo + Categoria + Subcategoria já existe na CONFIG.\n\n' +
+          'Deseja apenas refletir esse item nas lojas/DRE agora?',
+        ui.ButtonSet.YES_NO
+      );
+
+      if (refletirExistente !== ui.Button.YES) return;
+
+      LA_refletirItemConfigNasLojas_(ss, ui, {
+        tipo: tipo,
+        categoria: categoria,
+        subcategoria: subcategoria,
+        classeRelatorio: classeDuplicada,
+        origem: 'CONFIG existente',
+        criadoEm: new Date()
+      });
+      return;
+    }
 
     const classe = classeExistente || LA_promptClasseRelatorio_();
 
@@ -690,11 +713,8 @@ function adicionarItemAsListas() {
       origem: 'Menu Apps Script',
       criadoEm: new Date()
     };
-    const lojasSelecionadas = LA_perguntarLojasParaNovoItem_(item);
 
-    if (lojasSelecionadas === null) return;
-
-    const resultadoLojas = LA_executarComLockDocumento_(function () {
+    LA_executarComLockDocumento_(function () {
       const nextRow = LA_firstBlankRow_(cfg, 1, 2);
 
       cfg.getRange(nextRow, 1, 1, 6).setValues([[
@@ -707,15 +727,10 @@ function adicionarItemAsListas() {
       ]]);
 
       LA_rebuildListasVisiveis_();
-
-      const resultado = LA_inserirItemNasLojasSelecionadas_(ss, item, lojasSelecionadas);
-
       SpreadsheetApp.flush();
-
-      return resultado;
     });
 
-    LA_mostrarResultadoInsercaoLojas_(ui, resultadoLojas);
+    LA_refletirItemConfigNasLojas_(ss, ui, item);
 
     ss.toast(
       'Item adicionado: ' +
@@ -729,6 +744,28 @@ function adicionarItemAsListas() {
       5
     );
   });
+}
+
+
+function LA_refletirItemConfigNasLojas_(spreadsheet, ui, item) {
+  const lojasSelecionadas = LA_perguntarLojasParaNovoItem_(item);
+
+  if (lojasSelecionadas === null) {
+    LA_mostrarResultadoInsercaoLojas_(ui, {
+      inseridas: [],
+      ignoradas: ['Seleção de lojas cancelada; item criado apenas na CONFIG.'],
+      pendentes: []
+    });
+    return;
+  }
+
+  const resultadoLojas = LA_executarComLockDocumento_(function () {
+    const resultado = LA_inserirItemNasLojasSelecionadas_(spreadsheet, item, lojasSelecionadas);
+    SpreadsheetApp.flush();
+    return resultado;
+  });
+
+  LA_mostrarResultadoInsercaoLojas_(ui, resultadoLojas);
 }
 
 
@@ -772,9 +809,9 @@ function LA_perguntarLojasParaNovoItem_(item) {
   if (response.getSelectedButton() !== ui.Button.OK) return null;
 
   const raw = LA_normalizarTexto_(response.getResponseText());
-  const normalized = LA_chaveTexto_(raw).replace(/[^a-z0-9,]/g, '');
+  const normalized = LA_chaveTexto_(raw).replace(/[^a-z0-9]/g, '');
 
-  if (!raw || normalized === 'nenhuma' || normalized === 'nao' || normalized === 'não') {
+  if (!raw || normalized === 'nenhuma' || normalized === 'nao') {
     return [];
   }
 
@@ -784,7 +821,7 @@ function LA_perguntarLojasParaNovoItem_(item) {
 
   const selected = {};
 
-  raw.split(/[;,]/).forEach(function (part) {
+  LA_tokenizarSelecaoLojasDre_(raw).forEach(function (part) {
     const token = LA_normalizarTexto_(part);
     const index = Number(token);
 
@@ -811,6 +848,17 @@ function LA_perguntarLojasParaNovoItem_(item) {
   }
 
   return lojas;
+}
+
+
+function LA_tokenizarSelecaoLojasDre_(raw) {
+  return LA_normalizarTexto_(raw)
+    .replace(/\r?\n/g, ',')
+    .replace(/\s+e\s+/gi, ',')
+    .replace(/\s+and\s+/gi, ',')
+    .split(/[;,]/)
+    .map(LA_normalizarTexto_)
+    .filter(Boolean);
 }
 
 
@@ -850,15 +898,18 @@ function LA_inserirItemNasLojasSelecionadas_(spreadsheet, item, lojas) {
 
     if (status.status === 'inserted') {
       resultado.inseridas.push(nomeLoja + ': linha ' + status.row + '.');
+      LA_logResultadoInsercaoLoja_(nomeLoja, item, 'INSERIDO', status.row, '');
       return;
     }
 
     if (status.status === 'exists') {
       resultado.ignoradas.push(nomeLoja + ': item já existia.');
+      LA_logResultadoInsercaoLoja_(nomeLoja, item, 'DUPLICADO', null, 'Item já existe na loja.');
       return;
     }
 
     resultado.pendentes.push(nomeLoja + ': ' + status.message);
+    LA_logResultadoInsercaoLoja_(nomeLoja, item, 'NAO_INSERIDO', null, status.message);
   });
 
   console.info(JSON.stringify({
@@ -876,20 +927,6 @@ function LA_inserirItemNasLojasSelecionadas_(spreadsheet, item, lojas) {
 function LA_inserirItemNaLoja_(sheet, item) {
   const context = LA_lerContextoDreLoja_(sheet);
 
-  if (!context.columns.categoria) {
-    return {
-      status: 'manual',
-      message: 'não identifiquei uma coluna de Categoria para inserir com segurança.'
-    };
-  }
-
-  if (item.subcategoria && !context.columns.subcategoria) {
-    return {
-      status: 'manual',
-      message: 'não identifiquei uma coluna de Subcategoria/Fornecedor para inserir com segurança.'
-    };
-  }
-
   if (LA_itemJaExisteNaLoja_(context, item)) {
     return { status: 'exists' };
   }
@@ -903,9 +940,18 @@ function LA_inserirItemNaLoja_(sheet, item) {
     };
   }
 
-  const targetRow = LA_copiarLinhaModeloDre_(sheet, location.sourceRow, context.maxColumns, context.columns);
+  const fillColumns = LA_resolverColunasPreenchimentoDre_(context, location.sourceRow, item);
 
-  LA_preencherLinhaDre_(sheet, targetRow, context.columns, item);
+  if (!fillColumns.label && !fillColumns.categoria && !fillColumns.subcategoria) {
+    return {
+      status: 'manual',
+      message: 'encontrei linha-modelo, mas não identifiquei onde escrever Categoria/Subcategoria.'
+    };
+  }
+
+  const targetRow = LA_copiarLinhaModeloDre_(sheet, location.sourceRow, context.maxColumns, fillColumns);
+
+  LA_preencherLinhaDre_(sheet, targetRow, fillColumns, item);
 
   console.info(JSON.stringify({
     module: 'LANÇAMENTOS_DRE',
@@ -987,6 +1033,16 @@ function LA_itemJaExisteNaLoja_(context, item) {
   return context.values.some(function (row) {
     if (LA_linhaDreEhTotalOuSecao_(row)) return false;
 
+    if (!columns.categoria && !columns.subcategoria) {
+      const itemPrincipalExiste = item.subcategoria
+        ? LA_linhaContemTextoDre_(row, item.subcategoria)
+        : LA_linhaContemTextoDre_(row, item.categoria);
+      const classeOkSemColuna = !columns.classeRelatorio ||
+        LA_equalsTexto_(row[columns.classeRelatorio - 1], item.classeRelatorio);
+
+      return itemPrincipalExiste && classeOkSemColuna;
+    }
+
     const categoriaOk = LA_colunaOuLinhaContemDre_(row, columns.categoria, item.categoria);
     const subcategoriaOk = !item.subcategoria ||
       LA_colunaOuLinhaContemDre_(row, columns.subcategoria, item.subcategoria);
@@ -1006,9 +1062,11 @@ function LA_localizarSecaoDre_(context, item) {
   context.values.forEach(function (row, index) {
     if (LA_linhaDreEhTotalOuSecao_(row)) return;
 
-    const hasCategoryCell = columns.categoria && LA_normalizarTexto_(row[columns.categoria - 1]);
+    const hasText = row.some(function (cell) {
+      return LA_normalizarTexto_(cell) !== '';
+    });
 
-    if (!hasCategoryCell) return;
+    if (!hasText) return;
 
     if (LA_colunaOuLinhaContemDre_(row, columns.categoria, item.categoria)) {
       sameCategoryRows.push(index + 1);
@@ -1039,6 +1097,32 @@ function LA_localizarSecaoDre_(context, item) {
   }
 
   return null;
+}
+
+
+function LA_resolverColunasPreenchimentoDre_(context, sourceRow, item) {
+  const row = context.values[sourceRow - 1] || [];
+  const columns = {
+    tipo: context.columns.tipo,
+    categoria: context.columns.categoria,
+    subcategoria: context.columns.subcategoria,
+    classeRelatorio: context.columns.classeRelatorio,
+    label: 0
+  };
+
+  const categoriaMatch = LA_encontrarColunaTextoNaLinhaDre_(row, item.categoria);
+  const subcategoriaMatch = LA_encontrarColunaTextoNaLinhaDre_(row, item.subcategoria);
+
+  if (!columns.categoria && !columns.subcategoria) {
+    columns.label = subcategoriaMatch || categoriaMatch || LA_encontrarPrimeiraColunaTextoDre_(row);
+    return columns;
+  }
+
+  if (item.subcategoria && !columns.subcategoria) {
+    columns.label = subcategoriaMatch || LA_encontrarColunaTextoAposDre_(row, columns.categoria) || 0;
+  }
+
+  return columns;
 }
 
 
@@ -1081,6 +1165,10 @@ function LA_limparValoresNaoFormulaDaLinhaDre_(sheet, row, maxColumns, columns) 
 
 
 function LA_preencherLinhaDre_(sheet, row, columns, item) {
+  if (columns.label && !columns.categoria && !columns.subcategoria) {
+    sheet.getRange(row, columns.label).setValue(item.subcategoria || item.categoria);
+  }
+
   if (columns.tipo) {
     sheet.getRange(row, columns.tipo).setValue(item.tipo);
   }
@@ -1091,6 +1179,8 @@ function LA_preencherLinhaDre_(sheet, row, columns, item) {
 
   if (columns.subcategoria) {
     sheet.getRange(row, columns.subcategoria).setValue(item.subcategoria || '');
+  } else if (columns.label && item.subcategoria && columns.label !== columns.categoria) {
+    sheet.getRange(row, columns.label).setValue(item.subcategoria);
   }
 
   if (columns.classeRelatorio) {
@@ -1106,7 +1196,8 @@ function LA_colunasTextoDre_(columns) {
     columns.tipo,
     columns.categoria,
     columns.subcategoria,
-    columns.classeRelatorio
+    columns.classeRelatorio,
+    columns.label
   ].forEach(function (column) {
     if (column) {
       protectedColumns[column] = true;
@@ -1114,6 +1205,56 @@ function LA_colunasTextoDre_(columns) {
   });
 
   return protectedColumns;
+}
+
+
+function LA_encontrarColunaTextoNaLinhaDre_(row, expected) {
+  const expectedKey = LA_chaveTexto_(expected);
+
+  if (!expectedKey) return 0;
+
+  for (let index = 0; index < row.length; index++) {
+    const cellKey = LA_chaveTexto_(row[index]);
+
+    if (cellKey && (cellKey === expectedKey || cellKey.indexOf(expectedKey) !== -1)) {
+      return index + 1;
+    }
+  }
+
+  return 0;
+}
+
+
+function LA_encontrarColunaTextoAposDre_(row, startColumn) {
+  if (!startColumn) return 0;
+
+  for (let index = startColumn; index < row.length; index++) {
+    const value = LA_normalizarTexto_(row[index]);
+
+    if (value && !LA_valorTextoPareceNumeroDre_(value)) {
+      return index + 1;
+    }
+  }
+
+  return 0;
+}
+
+
+function LA_encontrarPrimeiraColunaTextoDre_(row) {
+  for (let index = 0; index < row.length; index++) {
+    const value = LA_normalizarTexto_(row[index]);
+
+    if (value && !LA_valorTextoPareceNumeroDre_(value)) {
+      return index + 1;
+    }
+  }
+
+  return 0;
+}
+
+
+function LA_valorTextoPareceNumeroDre_(value) {
+  return /^-?R?\$?\s*[\d.,%]+$/.test(LA_normalizarTexto_(value));
 }
 
 
@@ -1125,6 +1266,33 @@ function LA_colunaOuLinhaContemDre_(row, column, expected) {
   }
 
   return LA_linhaContemTextoDre_(row, expected);
+}
+
+
+function LA_logResultadoInsercaoLoja_(loja, item, status, row, motivo) {
+  const payload = {
+    action: 'INSERIR_ITEM_LOJA',
+    loja: loja,
+    categoria: item.categoria,
+    subcategoria: item.subcategoria,
+    classeRelatorio: item.classeRelatorio,
+    status: status
+  };
+
+  if (row) {
+    payload.row = row;
+  }
+
+  if (motivo) {
+    payload.motivo = motivo;
+  }
+
+  if (status === 'INSERIDO') {
+    console.info(JSON.stringify(payload));
+    return;
+  }
+
+  console.warn(JSON.stringify(payload));
 }
 
 
