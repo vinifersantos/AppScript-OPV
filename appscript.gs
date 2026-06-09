@@ -1118,11 +1118,37 @@ function LA_resolverColunasPreenchimentoDre_(context, sourceRow, item) {
     return columns;
   }
 
-  if (item.subcategoria && !columns.subcategoria) {
-    columns.label = subcategoriaMatch || LA_encontrarColunaTextoAposDre_(row, columns.categoria) || 0;
-  }
+  // Mesmo quando existem colunas técnicas (Categoria/Subcategoria/Classe),
+  // a DRE costuma ter uma coluna descritiva visível (ex.: "Conta") que herdou
+  // o texto da linha-modelo (ex.: "Outros juros") e precisa ser sobrescrita
+  // com o nome do item criado.
+  columns.label = LA_encontrarColunaRotuloVisivelDre_(row, columns);
 
   return columns;
+}
+
+
+function LA_encontrarColunaRotuloVisivelDre_(row, columns) {
+  const tecnicas = {};
+
+  [columns.tipo, columns.categoria, columns.subcategoria, columns.classeRelatorio]
+    .forEach(function (column) {
+      if (column) tecnicas[column] = true;
+    });
+
+  for (let index = 0; index < row.length; index++) {
+    const column = index + 1;
+
+    if (tecnicas[column]) continue;
+
+    const value = LA_normalizarTexto_(row[index]);
+
+    if (value && !LA_valorTextoPareceNumeroDre_(value)) {
+      return column;
+    }
+  }
+
+  return 0;
 }
 
 
@@ -1165,8 +1191,13 @@ function LA_limparValoresNaoFormulaDaLinhaDre_(sheet, row, maxColumns, columns) 
 
 
 function LA_preencherLinhaDre_(sheet, row, columns, item) {
-  if (columns.label && !columns.categoria && !columns.subcategoria) {
-    sheet.getRange(row, columns.label).setValue(item.subcategoria || item.categoria);
+  // Regra do rótulo visível: usa a Subcategoria; se não houver, usa a Categoria.
+  const rotuloVisivel = item.subcategoria || item.categoria;
+
+  // Sempre sobrescreve a coluna descritiva visível com o nome do item criado,
+  // para a nova linha não continuar exibindo o texto da linha-modelo copiada.
+  if (columns.label) {
+    sheet.getRange(row, columns.label).setValue(rotuloVisivel);
   }
 
   if (columns.tipo) {
@@ -1179,8 +1210,6 @@ function LA_preencherLinhaDre_(sheet, row, columns, item) {
 
   if (columns.subcategoria) {
     sheet.getRange(row, columns.subcategoria).setValue(item.subcategoria || '');
-  } else if (columns.label && item.subcategoria && columns.label !== columns.categoria) {
-    sheet.getRange(row, columns.label).setValue(item.subcategoria);
   }
 
   if (columns.classeRelatorio) {
@@ -1217,21 +1246,6 @@ function LA_encontrarColunaTextoNaLinhaDre_(row, expected) {
     const cellKey = LA_chaveTexto_(row[index]);
 
     if (cellKey && (cellKey === expectedKey || cellKey.indexOf(expectedKey) !== -1)) {
-      return index + 1;
-    }
-  }
-
-  return 0;
-}
-
-
-function LA_encontrarColunaTextoAposDre_(row, startColumn) {
-  if (!startColumn) return 0;
-
-  for (let index = startColumn; index < row.length; index++) {
-    const value = LA_normalizarTexto_(row[index]);
-
-    if (value && !LA_valorTextoPareceNumeroDre_(value)) {
       return index + 1;
     }
   }
