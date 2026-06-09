@@ -109,6 +109,7 @@ function BP_criarMenuBoletos_() {
 const LA_ABA_LANCAMENTOS = 'LANÇAMENTOS';
 const LA_ABA_CONFIG = 'CONFIG';
 
+const LA_LINHA_CABECALHO = 19;
 const LA_PRIMEIRA_LINHA_DADOS = 20;
 const LA_ULTIMA_LINHA_DADOS = 5000;
 const LA_TOTAL_LINHAS_DADOS = LA_ULTIMA_LINHA_DADOS - LA_PRIMEIRA_LINHA_DADOS + 1;
@@ -153,6 +154,22 @@ const LA_INTERVALOS_FORMULARIO = Object.freeze({
   OBSERVACOES: 'frmObservacoes'
 });
 
+const LA_AREA_FORMULARIO_A1 = 'A4:C14';
+
+const LA_FORMULARIO_A1 = Object.freeze({
+  frmDataLancamento: 'B4',
+  frmMesCompetencia: 'B5',
+  frmUnidade: 'B6',
+  frmTipoLancamento: 'B7',
+  frmCategoria: 'B8',
+  frmSubcategoria: 'B9',
+  frmValor: 'B10',
+  frmFormaPgto: 'B11',
+  frmStatus: 'B12',
+  frmDataPgto: 'B13',
+  frmObservacoes: 'B14'
+});
+
 const LA_INTERVALOS_OBRIGATORIOS_FORMULARIO = [
   LA_INTERVALOS_FORMULARIO.DATA,
   LA_INTERVALOS_FORMULARIO.UNIDADE,
@@ -179,6 +196,18 @@ const LA_CLASSES_RELATORIO = [
   'Faturamento',
   'Despesa',
   'Ignorar'
+];
+
+const LA_ABAS_LOJAS_DRE = [
+  'CENTRO',
+  'C. DO MAR',
+  'OUTLET',
+  'TNC.'
+];
+
+const LA_CLASSES_DRE_AUTOMATICAS = [
+  'Faturamento',
+  'Despesa'
 ];
 
 
@@ -513,18 +542,9 @@ function limparFormulario() {
 
 function LA_limparFormulario_() {
   const ss = SpreadsheetApp.getActive();
-  const range = ss.getRangeByName(LA_INTERVALOS_FORMULARIO.AREA);
-
-  if (!range) {
-    ss.toast(
-      'Intervalo nomeado não encontrado: ' + LA_INTERVALOS_FORMULARIO.AREA + '.',
-      'Formulário',
-      5
-    );
-    return;
-  }
-
-  range.clearContent();
+  LA_obterAbaObrigatoria_(ss, LA_ABA_LANCAMENTOS)
+    .getRange(LA_AREA_FORMULARIO_A1)
+    .clearContent();
 }
 
 
@@ -662,33 +682,495 @@ function adicionarItemAsListas() {
 
     if (confirmar !== ui.Button.YES) return;
 
-    const nextRow = LA_firstBlankRow_(cfg, 1, 2);
+    const item = {
+      tipo: tipo,
+      categoria: categoria,
+      subcategoria: subcategoria,
+      classeRelatorio: classe,
+      origem: 'Menu Apps Script',
+      criadoEm: new Date()
+    };
+    const lojasSelecionadas = LA_perguntarLojasParaNovoItem_(item);
 
-    cfg.getRange(nextRow, 1, 1, 6).setValues([[
-      tipo,
-      categoria,
-      subcategoria,
-      'Menu Apps Script',
-      'Dropdown dependente',
-      classe
-    ]]);
+    if (lojasSelecionadas === null) return;
 
-    LA_rebuildListasVisiveis_();
+    const resultadoLojas = LA_executarComLockDocumento_(function () {
+      const nextRow = LA_firstBlankRow_(cfg, 1, 2);
 
-    SpreadsheetApp.flush();
+      cfg.getRange(nextRow, 1, 1, 6).setValues([[
+        item.tipo,
+        item.categoria,
+        item.subcategoria,
+        item.origem,
+        'Dropdown dependente',
+        item.classeRelatorio
+      ]]);
+
+      LA_rebuildListasVisiveis_();
+
+      const resultado = LA_inserirItemNasLojasSelecionadas_(ss, item, lojasSelecionadas);
+
+      SpreadsheetApp.flush();
+
+      return resultado;
+    });
+
+    LA_mostrarResultadoInsercaoLojas_(ui, resultadoLojas);
 
     ss.toast(
       'Item adicionado: ' +
-        tipo +
+        item.tipo +
         ' > ' +
-        categoria +
-        (subcategoria ? ' > ' + subcategoria : '') +
+        item.categoria +
+        (item.subcategoria ? ' > ' + item.subcategoria : '') +
         ' | Classe: ' +
-        classe,
+        item.classeRelatorio,
       'Listas atualizadas',
       5
     );
   });
+}
+
+
+function LA_perguntarLojasParaNovoItem_(item) {
+  const ui = SpreadsheetApp.getUi();
+  const abasLojas = LA_obterAbasLojasDre_();
+
+  if (!LA_CLASSES_DRE_AUTOMATICAS.some(function (classe) {
+    return LA_equalsTexto_(classe, item.classeRelatorio);
+  })) {
+    ui.alert(
+      'Reflexo nas lojas',
+      'A classe "' + item.classeRelatorio + '" foi salva apenas na CONFIG.\n\n' +
+        'O script só insere automaticamente nas lojas itens de Faturamento ou Despesa.',
+      ui.ButtonSet.OK
+    );
+    return [];
+  }
+
+  const opcoes = [
+    'Digite "todas" para inserir em todas as lojas.',
+    'Digite "nenhuma" para salvar apenas na CONFIG.',
+    'Ou digite os números separados por vírgula:',
+  ].concat(
+    abasLojas.map(function (loja, index) {
+      return (index + 1) + ' - ' + loja;
+    })
+  );
+
+  const response = ui.prompt(
+    'Refletir item nas lojas',
+    'Em quais lojas este item deve aparecer no Resumo Financeiro/DRE?\n\n' +
+      'Item: ' + item.categoria +
+      (item.subcategoria ? ' > ' + item.subcategoria : '') +
+      '\nClasse: ' + item.classeRelatorio +
+      '\n\n' +
+      opcoes.join('\n'),
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (response.getSelectedButton() !== ui.Button.OK) return null;
+
+  const raw = LA_normalizarTexto_(response.getResponseText());
+  const normalized = LA_chaveTexto_(raw).replace(/[^a-z0-9,]/g, '');
+
+  if (!raw || normalized === 'nenhuma' || normalized === 'nao' || normalized === 'não') {
+    return [];
+  }
+
+  if (normalized === 'todas' || normalized === 'todos') {
+    return abasLojas.slice();
+  }
+
+  const selected = {};
+
+  raw.split(/[;,]/).forEach(function (part) {
+    const token = LA_normalizarTexto_(part);
+    const index = Number(token);
+
+    if (Number.isInteger(index) && index >= 1 && index <= abasLojas.length) {
+      selected[abasLojas[index - 1]] = true;
+      return;
+    }
+
+    abasLojas.forEach(function (loja) {
+      if (LA_equalsTexto_(loja, token)) {
+        selected[loja] = true;
+      }
+    });
+  });
+
+  const lojas = Object.keys(selected);
+
+  if (!lojas.length) {
+    ui.alert(
+      'Lojas não reconhecidas',
+      'Não consegui identificar as lojas informadas. O item será salvo apenas na CONFIG.',
+      ui.ButtonSet.OK
+    );
+  }
+
+  return lojas;
+}
+
+
+function LA_obterAbasLojasDre_() {
+  return LA_ABAS_LOJAS_DRE.slice();
+}
+
+
+function LA_inserirItemNasLojasSelecionadas_(spreadsheet, item, lojas) {
+  const resultado = {
+    inseridas: [],
+    ignoradas: [],
+    pendentes: []
+  };
+
+  if (!lojas.length) {
+    resultado.ignoradas.push('Nenhuma loja selecionada; item salvo apenas na CONFIG.');
+    return resultado;
+  }
+
+  lojas.forEach(function (nomeLoja) {
+    const sheet = spreadsheet.getSheetByName(nomeLoja);
+
+    if (!sheet) {
+      resultado.pendentes.push(nomeLoja + ': aba não encontrada.');
+      console.warn(JSON.stringify({
+        module: 'LANÇAMENTOS_DRE',
+        action: 'sheet_not_found',
+        loja: nomeLoja,
+        item: item,
+        timestamp: new Date().toISOString()
+      }));
+      return;
+    }
+
+    const status = LA_inserirItemNaLoja_(sheet, item);
+
+    if (status.status === 'inserted') {
+      resultado.inseridas.push(nomeLoja + ': linha ' + status.row + '.');
+      return;
+    }
+
+    if (status.status === 'exists') {
+      resultado.ignoradas.push(nomeLoja + ': item já existia.');
+      return;
+    }
+
+    resultado.pendentes.push(nomeLoja + ': ' + status.message);
+  });
+
+  console.info(JSON.stringify({
+    module: 'LANÇAMENTOS_DRE',
+    action: 'insert_item_result',
+    item: item,
+    resultado: resultado,
+    timestamp: new Date().toISOString()
+  }));
+
+  return resultado;
+}
+
+
+function LA_inserirItemNaLoja_(sheet, item) {
+  const context = LA_lerContextoDreLoja_(sheet);
+
+  if (!context.columns.categoria) {
+    return {
+      status: 'manual',
+      message: 'não identifiquei uma coluna de Categoria para inserir com segurança.'
+    };
+  }
+
+  if (item.subcategoria && !context.columns.subcategoria) {
+    return {
+      status: 'manual',
+      message: 'não identifiquei uma coluna de Subcategoria/Fornecedor para inserir com segurança.'
+    };
+  }
+
+  if (LA_itemJaExisteNaLoja_(context, item)) {
+    return { status: 'exists' };
+  }
+
+  const location = LA_localizarSecaoDre_(context, item);
+
+  if (!location) {
+    return {
+      status: 'manual',
+      message: 'não encontrei linha-modelo compatível por Categoria ou ClasseRelatorio.'
+    };
+  }
+
+  const targetRow = LA_copiarLinhaModeloDre_(sheet, location.sourceRow, context.maxColumns, context.columns);
+
+  LA_preencherLinhaDre_(sheet, targetRow, context.columns, item);
+
+  console.info(JSON.stringify({
+    module: 'LANÇAMENTOS_DRE',
+    action: 'insert_item_sheet',
+    loja: sheet.getName(),
+    sourceRow: location.sourceRow,
+    targetRow: targetRow,
+    reason: location.reason,
+    item: item,
+    timestamp: new Date().toISOString()
+  }));
+
+  return {
+    status: 'inserted',
+    row: targetRow
+  };
+}
+
+
+function LA_lerContextoDreLoja_(sheet) {
+  const range = sheet.getDataRange();
+  const values = range.getDisplayValues();
+
+  return {
+    sheet: sheet,
+    values: values,
+    maxColumns: range.getNumColumns(),
+    columns: LA_inferirColunasDre_(values)
+  };
+}
+
+
+function LA_inferirColunasDre_(values) {
+  const columns = {
+    tipo: 0,
+    categoria: 0,
+    subcategoria: 0,
+    classeRelatorio: 0
+  };
+  const rowsToScan = Math.min(values.length, 30);
+
+  for (let row = 0; row < rowsToScan; row++) {
+    values[row].forEach(function (cell, index) {
+      const key = LA_chaveTexto_(cell).replace(/[^a-z0-9]/g, '');
+
+      if (!columns.tipo && key === 'tipo') {
+        columns.tipo = index + 1;
+      }
+
+      if (!columns.categoria && key === 'categoria') {
+        columns.categoria = index + 1;
+      }
+
+      if (!columns.subcategoria && (
+        key === 'subcategoria' ||
+        key === 'fornecedor' ||
+        key === 'subcategoriafornecedor'
+      )) {
+        columns.subcategoria = index + 1;
+      }
+
+      if (!columns.classeRelatorio && (
+        key === 'classe' ||
+        key === 'classerelatorio' ||
+        key === 'classedorelatorios'
+      )) {
+        columns.classeRelatorio = index + 1;
+      }
+    });
+  }
+
+  return columns;
+}
+
+
+function LA_itemJaExisteNaLoja_(context, item) {
+  const columns = context.columns;
+
+  return context.values.some(function (row) {
+    if (LA_linhaDreEhTotalOuSecao_(row)) return false;
+
+    const categoriaOk = LA_colunaOuLinhaContemDre_(row, columns.categoria, item.categoria);
+    const subcategoriaOk = !item.subcategoria ||
+      LA_colunaOuLinhaContemDre_(row, columns.subcategoria, item.subcategoria);
+    const classeOk = !columns.classeRelatorio ||
+      LA_equalsTexto_(row[columns.classeRelatorio - 1], item.classeRelatorio);
+
+    return categoriaOk && subcategoriaOk && classeOk;
+  });
+}
+
+
+function LA_localizarSecaoDre_(context, item) {
+  const columns = context.columns;
+  const sameCategoryRows = [];
+  const sameClassRows = [];
+
+  context.values.forEach(function (row, index) {
+    if (LA_linhaDreEhTotalOuSecao_(row)) return;
+
+    const hasCategoryCell = columns.categoria && LA_normalizarTexto_(row[columns.categoria - 1]);
+
+    if (!hasCategoryCell) return;
+
+    if (LA_colunaOuLinhaContemDre_(row, columns.categoria, item.categoria)) {
+      sameCategoryRows.push(index + 1);
+      return;
+    }
+
+    if (
+      LA_colunaOuLinhaContemDre_(row, columns.classeRelatorio, item.classeRelatorio) ||
+      LA_linhaContemTextoDre_(row, item.classeRelatorio) ||
+      LA_linhaContemTextoDre_(row, item.tipo)
+    ) {
+      sameClassRows.push(index + 1);
+    }
+  });
+
+  if (sameCategoryRows.length) {
+    return {
+      sourceRow: sameCategoryRows[sameCategoryRows.length - 1],
+      reason: 'same_category'
+    };
+  }
+
+  if (sameClassRows.length) {
+    return {
+      sourceRow: sameClassRows[sameClassRows.length - 1],
+      reason: 'same_class_or_type'
+    };
+  }
+
+  return null;
+}
+
+
+function LA_copiarLinhaModeloDre_(sheet, sourceRow, maxColumns, columns) {
+  sheet.insertRowsAfter(sourceRow, 1);
+
+  const targetRow = sourceRow + 1;
+  const sourceRange = sheet.getRange(sourceRow, 1, 1, maxColumns);
+  const targetRange = sheet.getRange(targetRow, 1, 1, maxColumns);
+
+  sourceRange.copyTo(targetRange, SpreadsheetApp.CopyPasteType.PASTE_NORMAL, false);
+  sheet.setRowHeight(targetRow, sheet.getRowHeight(sourceRow));
+
+  LA_limparValoresNaoFormulaDaLinhaDre_(sheet, targetRow, maxColumns, columns);
+
+  return targetRow;
+}
+
+
+function LA_limparValoresNaoFormulaDaLinhaDre_(sheet, row, maxColumns, columns) {
+  const formulas = sheet.getRange(row, 1, 1, maxColumns).getFormulas()[0];
+  const values = sheet.getRange(row, 1, 1, maxColumns).getValues()[0];
+  const protectedColumns = LA_colunasTextoDre_(columns);
+  const rangesToClear = [];
+
+  values.forEach(function (value, index) {
+    const column = index + 1;
+
+    if (protectedColumns[column] || formulas[index]) return;
+
+    if (typeof value === 'number' || value instanceof Date) {
+      rangesToClear.push(APP_a1Range_(row, column));
+    }
+  });
+
+  if (rangesToClear.length) {
+    sheet.getRangeList(rangesToClear).clearContent();
+  }
+}
+
+
+function LA_preencherLinhaDre_(sheet, row, columns, item) {
+  if (columns.tipo) {
+    sheet.getRange(row, columns.tipo).setValue(item.tipo);
+  }
+
+  if (columns.categoria) {
+    sheet.getRange(row, columns.categoria).setValue(item.categoria);
+  }
+
+  if (columns.subcategoria) {
+    sheet.getRange(row, columns.subcategoria).setValue(item.subcategoria || '');
+  }
+
+  if (columns.classeRelatorio) {
+    sheet.getRange(row, columns.classeRelatorio).setValue(item.classeRelatorio);
+  }
+}
+
+
+function LA_colunasTextoDre_(columns) {
+  const protectedColumns = {};
+
+  [
+    columns.tipo,
+    columns.categoria,
+    columns.subcategoria,
+    columns.classeRelatorio
+  ].forEach(function (column) {
+    if (column) {
+      protectedColumns[column] = true;
+    }
+  });
+
+  return protectedColumns;
+}
+
+
+function LA_colunaOuLinhaContemDre_(row, column, expected) {
+  if (!expected) return true;
+
+  if (column && LA_equalsTexto_(row[column - 1], expected)) {
+    return true;
+  }
+
+  return LA_linhaContemTextoDre_(row, expected);
+}
+
+
+function LA_linhaContemTextoDre_(row, expected) {
+  const expectedKey = LA_chaveTexto_(expected);
+
+  if (!expectedKey) return true;
+
+  return row.some(function (cell) {
+    return LA_chaveTexto_(cell).indexOf(expectedKey) !== -1;
+  });
+}
+
+
+function LA_linhaDreEhTotalOuSecao_(row) {
+  const texto = LA_chaveTexto_(row.join(' '));
+
+  return (
+    texto.indexOf('total') !== -1 ||
+    texto.indexOf('subtotal') !== -1 ||
+    texto.indexOf('saldo') !== -1 ||
+    texto.indexOf('resultado') !== -1
+  );
+}
+
+
+function LA_mostrarResultadoInsercaoLojas_(ui, resultado) {
+  if (!resultado) return;
+
+  const linhas = [];
+
+  if (resultado.inseridas.length) {
+    linhas.push('Inseridas:\n' + resultado.inseridas.join('\n'));
+  }
+
+  if (resultado.ignoradas.length) {
+    linhas.push('Ignoradas:\n' + resultado.ignoradas.join('\n'));
+  }
+
+  if (resultado.pendentes.length) {
+    linhas.push('Revisão manual necessária:\n' + resultado.pendentes.join('\n'));
+  }
+
+  if (!linhas.length) return;
+
+  ui.alert('Reflexo nas lojas/DRE', linhas.join('\n\n'), ui.ButtonSet.OK);
 }
 
 
@@ -960,9 +1442,15 @@ function LA_getValue_(namedRange) {
 
 function LA_lerValoresIntervalosNomeados_(spreadsheet, names, namedRangeMap) {
   const ranges = namedRangeMap || LA_mapearIntervalosNomeados_(spreadsheet, names);
+  const lancamentos = spreadsheet.getSheetByName(LA_ABA_LANCAMENTOS);
   const values = {};
 
   names.forEach(function (name) {
+    if (lancamentos && LA_FORMULARIO_A1[name]) {
+      values[name] = lancamentos.getRange(LA_FORMULARIO_A1[name]).getValue();
+      return;
+    }
+
     values[name] = ranges[name] ? ranges[name].getRange().getValue() : '';
   });
 
@@ -991,8 +1479,10 @@ function LA_mapearIntervalosNomeados_(spreadsheet, names) {
 
 function LA_listarIntervalosNomeadosAusentes_(spreadsheet, names, namedRangeMap) {
   const ranges = namedRangeMap || LA_mapearIntervalosNomeados_(spreadsheet, names);
+  const lancamentos = spreadsheet.getSheetByName(LA_ABA_LANCAMENTOS);
 
   return names.filter(function (name) {
+    if (lancamentos && LA_FORMULARIO_A1[name]) return false;
     return !ranges[name];
   });
 }
@@ -1493,10 +1983,11 @@ function validarEstruturaLancamentos() {
     const checks = [
       ['Aba LANÇAMENTOS existe', Boolean(abaLanc)],
       ['Aba CONFIG existe', Boolean(abaCfg)],
+      ['Cabeçalho LANÇAMENTOS está na linha 19', abaLanc ? abaLanc.getRange(LA_LINHA_CABECALHO, 1, 1, LA_COLUNAS_LANCAMENTO.EXCLUIR).getNumColumns() === LA_COLUNAS_LANCAMENTO.EXCLUIR : false],
       ['Aba LANÇAMENTOS alcança linha 5000', abaLanc ? abaLanc.getMaxRows() >= LA_ULTIMA_LINHA_DADOS : false],
       ['CONFIG tem coluna F (ClasseRelatorio)', abaCfg ? abaCfg.getMaxColumns() >= 6 : false],
       ['Intervalos nomeados obrigatórios existem', intervalosAusentes.length === 0],
-      ['Intervalo frmAreaFormulario existe', Boolean(ss.getRangeByName(LA_INTERVALOS_FORMULARIO.AREA))],
+      ['Formulário atual existe em LANÇAMENTOS!' + LA_AREA_FORMULARIO_A1, abaLanc ? abaLanc.getRange(LA_AREA_FORMULARIO_A1).getNumRows() === 11 : false],
       ['CONFIG tem dados cadastrados', abaCfg ? abaCfg.getLastRow() > 1 : false],
       ['Backup de exclusão disponível', Boolean(
         PropertiesService.getDocumentProperties().getProperty('LA_ULTIMO_BACKUP_EXCLUSAO')

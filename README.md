@@ -22,26 +22,26 @@ Registra receitas e despesas na aba `LANÇAMENTOS` com validação completa de d
 
 **Abas necessárias:**
 
-- `LANÇAMENTOS` — tabela de dados (linhas 21–5000)
+- `LANÇAMENTOS` — formulário em `A4:C14`, cabeçalho na linha 19 e dados nas linhas 20–5000
 - `CONFIG` — lista de Tipo / Categoria / Subcategoria / Classe no relatório
 
 **Intervalos nomeados obrigatórios:**
 
 | Nome | Descrição |
 |---|---|
-| `frmAreaFormulario` | Área completa do formulário (limpar tudo) |
 | `frmDataLancamento` | Campo Data |
 | `frmMesCompetencia` | Campo Mês de competência (opcional) |
 | `frmUnidade` | Campo Unidade |
 | `frmTipoLancamento` | Campo Tipo |
 | `frmCategoria` | Campo Categoria |
 | `frmSubcategoria` | Campo Subcategoria |
-| `frmDescricao` | Campo Descrição |
 | `frmValor` | Campo Valor |
 | `frmFormaPgto` | Campo Forma de Pagamento |
 | `frmStatus` | Campo Status |
 | `frmDataPgto` | Campo Data de Pagamento |
 | `frmObservacoes` | Campo Observações |
+
+O script prioriza o mapa fixo atual do formulário (`B4:B14`) e usa intervalos nomeados apenas como compatibilidade quando necessário.
 
 **Colunas da tabela `LANÇAMENTOS`:**
 
@@ -54,21 +54,31 @@ Registra receitas e despesas na aba `LANÇAMENTOS` com validação completa de d
 | F | Tipo |
 | G | Categoria |
 | H | Subcategoria |
-| I | Descrição |
-| J | Valor |
-| K | Forma de Pagamento |
-| L | Status |
-| M | Data de Pagamento |
-| N | Observações |
-| O | Criado em |
-| P | Excluir (checkbox) |
-| Q | Chave Técnica (anti-duplicidade) |
-| S | Lista de Tipos |
-| T | Lista de Categorias |
-| V | Lista de Formas de Pagamento |
+| I | Valor |
+| J | Forma de Pagamento |
+| K | Status |
+| L | Data de Pagamento |
+| M | Observações |
+| N | Criado em |
+| O | Excluir (checkbox) |
+| P | Chave Técnica (anti-duplicidade) |
+| CL | Classe do tipo (fórmula/automação) |
+| R | Lista de Tipos |
+| S | Lista de Categorias |
+| T | Lista de Status |
+| U | Lista de Formas de Pagamento |
 
 **Classes de relatório disponíveis na `CONFIG`:**  
-`Faturamento` · `Despesa` · `Indicador` · `Forma de Pagamento` · `Em Aberto` · `Desconto` · `Ignorar`
+`Faturamento` · `Despesa` · `Ignorar`
+
+Ao usar **Lançamentos → Adicionar item às listas**, o item é salvo na `CONFIG` e, para classes `Faturamento` ou `Despesa`, o script pergunta se deve refletir a nova linha nas abas de lojas/DRE:
+
+- `CENTRO`
+- `C. DO MAR`
+- `OUTLET`
+- `TNC.`
+
+A inserção nas lojas é conservadora: o script procura uma linha-modelo por mesma Categoria ou ClasseRelatorio, copia formatação/fórmulas/validações/altura e altera apenas campos textuais identificados. Se não encontrar uma estrutura segura, não insere automaticamente e mostra pendência para revisão manual.
 
 ---
 
