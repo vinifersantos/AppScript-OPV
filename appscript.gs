@@ -195,8 +195,7 @@ const LA_INTERVALOS_DADOS_FORMULARIO = [
 const LA_CLASSE_PADRAO_NOVO_ITEM = 'Despesa';
 
 const LA_CLASSES_RELATORIO = [
-  'Despesa',
-  'Ignorar'
+  'Despesa'
 ];
 
 const LA_ABAS_LOJAS_DRE = [
@@ -1377,9 +1376,9 @@ function LA_ensureConfigClassHeader_() {
 
     if (!tipo) return;
 
-    const classeAtual = LA_classeRelatorioExistente_(row[5]);
+    const classeAtual = LA_matchClasseRelatorio_(row[5]);
     const classePeloTipo = LA_matchClasseRelatorio_(tipo);
-    const novaClasse = classeAtual || classePeloTipo || 'Ignorar';
+    const novaClasse = classeAtual || classePeloTipo || LA_CLASSE_PADRAO_NOVO_ITEM;
 
     if (row[5] !== novaClasse) {
       row[5] = novaClasse;
@@ -1455,8 +1454,7 @@ function LA_promptClasseRelatorio_() {
       LA_CLASSES_RELATORIO.join('\n') +
       '\n\n' +
       'Dica:\n' +
-      '- Use "Despesa" para custos/despesas.\n' +
-      '- Use "Ignorar" se esse Tipo não deve afetar os relatórios.',
+      '- O fluxo operacional atual usa somente "Despesa".',
     ui.ButtonSet.OK_CANCEL
   );
 
@@ -1934,19 +1932,6 @@ function LA_matchClasseRelatorio_(value) {
   return LA_CLASSES_RELATORIO.find(function (classe) {
     return LA_equalsTexto_(classe, texto);
   }) || '';
-}
-
-
-function LA_classeRelatorioExistente_(value) {
-  const classe = LA_matchClasseRelatorio_(value);
-
-  if (classe) return classe;
-
-  if (LA_equalsTexto_(value, 'Faturamento')) {
-    return 'Faturamento';
-  }
-
-  return '';
 }
 
 
