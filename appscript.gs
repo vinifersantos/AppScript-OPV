@@ -192,8 +192,9 @@ const LA_INTERVALOS_DADOS_FORMULARIO = [
   LA_INTERVALOS_FORMULARIO.OBSERVACOES
 ];
 
+const LA_CLASSE_PADRAO_NOVO_ITEM = 'Despesa';
+
 const LA_CLASSES_RELATORIO = [
-  'Faturamento',
   'Despesa',
   'Ignorar'
 ];
@@ -206,8 +207,7 @@ const LA_ABAS_LOJAS_DRE = [
 ];
 
 const LA_CLASSES_DRE_AUTOMATICAS = [
-  'Faturamento',
-  'Despesa'
+  LA_CLASSE_PADRAO_NOVO_ITEM
 ];
 
 
@@ -656,19 +656,9 @@ function adicionarItemAsListas() {
       );
     });
 
-    const classeExistente = data
-      .filter(function (row) { return LA_equalsTexto_(row[0], tipo); })
-      .map(function (row) { return LA_matchClasseRelatorio_(row[5]); })
-      .find(Boolean);
+    const classe = LA_CLASSE_PADRAO_NOVO_ITEM;
 
     if (linhaDuplicada) {
-      const classeDuplicada = LA_matchClasseRelatorio_(linhaDuplicada[5]) || classeExistente;
-
-      if (!classeDuplicada) {
-        ui.alert('Esse item já existe na CONFIG, mas está sem ClasseRelatorio válida.');
-        return;
-      }
-
       const refletirExistente = ui.alert(
         'Item já existe na CONFIG',
         'Esse Tipo + Categoria + Subcategoria já existe na CONFIG.\n\n' +
@@ -682,16 +672,12 @@ function adicionarItemAsListas() {
         tipo: tipo,
         categoria: categoria,
         subcategoria: subcategoria,
-        classeRelatorio: classeDuplicada,
+        classeRelatorio: classe,
         origem: 'CONFIG existente',
         criadoEm: new Date()
       });
       return;
     }
-
-    const classe = classeExistente || LA_promptClasseRelatorio_();
-
-    if (!classe) return;
 
     const confirmar = ui.alert(
       'Confirmar novo item',
@@ -779,7 +765,7 @@ function LA_perguntarLojasParaNovoItem_(item) {
     ui.alert(
       'Reflexo nas lojas',
       'A classe "' + item.classeRelatorio + '" foi salva apenas na CONFIG.\n\n' +
-        'O script só insere automaticamente nas lojas itens de Faturamento ou Despesa.',
+        'O script só insere automaticamente nas lojas itens classificados como Despesa.',
       ui.ButtonSet.OK
     );
     return [];
@@ -800,7 +786,7 @@ function LA_perguntarLojasParaNovoItem_(item) {
     'Em quais lojas este item deve aparecer no Resumo Financeiro/DRE?\n\n' +
       'Item: ' + item.categoria +
       (item.subcategoria ? ' > ' + item.subcategoria : '') +
-      '\nClasse: ' + item.classeRelatorio +
+      '\nClasse: ' + LA_CLASSE_PADRAO_NOVO_ITEM +
       '\n\n' +
       opcoes.join('\n'),
     ui.ButtonSet.OK_CANCEL
@@ -904,7 +890,7 @@ function LA_inserirItemNasLojasSelecionadas_(spreadsheet, item, lojas) {
 
     if (status.status === 'exists') {
       resultado.ignoradas.push(nomeLoja + ': item já existia.');
-      LA_logResultadoInsercaoLoja_(nomeLoja, item, 'DUPLICADO', null, 'Item já existe na loja.');
+      LA_logResultadoInsercaoLoja_(nomeLoja, item, 'IGNORADO_DUPLICADO', null, 'Item já existe na loja.');
       return;
     }
 
@@ -936,7 +922,7 @@ function LA_inserirItemNaLoja_(sheet, item) {
   if (!location) {
     return {
       status: 'manual',
-      message: 'não encontrei linha-modelo compatível por Categoria ou ClasseRelatorio.'
+      message: 'Linha-modelo de despesa não encontrada.'
     };
   }
 
@@ -1038,7 +1024,8 @@ function LA_itemJaExisteNaLoja_(context, item) {
         ? LA_linhaContemTextoDre_(row, item.subcategoria)
         : LA_linhaContemTextoDre_(row, item.categoria);
       const classeOkSemColuna = !columns.classeRelatorio ||
-        LA_equalsTexto_(row[columns.classeRelatorio - 1], item.classeRelatorio);
+        LA_normalizarComparacaoDre_(row[columns.classeRelatorio - 1]) ===
+          LA_normalizarComparacaoDre_(item.classeRelatorio);
 
       return itemPrincipalExiste && classeOkSemColuna;
     }
@@ -1047,7 +1034,8 @@ function LA_itemJaExisteNaLoja_(context, item) {
     const subcategoriaOk = !item.subcategoria ||
       LA_colunaOuLinhaContemDre_(row, columns.subcategoria, item.subcategoria);
     const classeOk = !columns.classeRelatorio ||
-      LA_equalsTexto_(row[columns.classeRelatorio - 1], item.classeRelatorio);
+      LA_normalizarComparacaoDre_(row[columns.classeRelatorio - 1]) ===
+        LA_normalizarComparacaoDre_(item.classeRelatorio);
 
     return categoriaOk && subcategoriaOk && classeOk;
   });
@@ -1057,7 +1045,7 @@ function LA_itemJaExisteNaLoja_(context, item) {
 function LA_localizarSecaoDre_(context, item) {
   const columns = context.columns;
   const sameCategoryRows = [];
-  const sameClassRows = [];
+  const expenseRows = [];
 
   context.values.forEach(function (row, index) {
     if (LA_linhaDreEhTotalOuSecao_(row)) return;
@@ -1074,11 +1062,11 @@ function LA_localizarSecaoDre_(context, item) {
     }
 
     if (
-      LA_colunaOuLinhaContemDre_(row, columns.classeRelatorio, item.classeRelatorio) ||
-      LA_linhaContemTextoDre_(row, item.classeRelatorio) ||
+      LA_colunaOuLinhaContemDre_(row, columns.classeRelatorio, LA_CLASSE_PADRAO_NOVO_ITEM) ||
+      LA_linhaContemTextoDre_(row, LA_CLASSE_PADRAO_NOVO_ITEM) ||
       LA_linhaContemTextoDre_(row, item.tipo)
     ) {
-      sameClassRows.push(index + 1);
+      expenseRows.push(index + 1);
     }
   });
 
@@ -1089,10 +1077,10 @@ function LA_localizarSecaoDre_(context, item) {
     };
   }
 
-  if (sameClassRows.length) {
+  if (expenseRows.length) {
     return {
-      sourceRow: sameClassRows[sameClassRows.length - 1],
-      reason: 'same_class_or_type'
+      sourceRow: expenseRows[expenseRows.length - 1],
+      reason: 'expense_class_or_type'
     };
   }
 
@@ -1112,43 +1100,28 @@ function LA_resolverColunasPreenchimentoDre_(context, sourceRow, item) {
 
   const categoriaMatch = LA_encontrarColunaTextoNaLinhaDre_(row, item.categoria);
   const subcategoriaMatch = LA_encontrarColunaTextoNaLinhaDre_(row, item.subcategoria);
+  const labelByModel = subcategoriaMatch || categoriaMatch || LA_encontrarPrimeiraColunaTextoDre_(row);
 
-  if (!columns.categoria && !columns.subcategoria) {
-    columns.label = subcategoriaMatch || categoriaMatch || LA_encontrarPrimeiraColunaTextoDre_(row);
+  if (item.subcategoria && columns.subcategoria) {
+    columns.label = columns.subcategoria;
     return columns;
   }
 
-  // Mesmo quando existem colunas técnicas (Categoria/Subcategoria/Classe),
-  // a DRE costuma ter uma coluna descritiva visível (ex.: "Conta") que herdou
-  // o texto da linha-modelo (ex.: "Outros juros") e precisa ser sobrescrita
-  // com o nome do item criado.
-  columns.label = LA_encontrarColunaRotuloVisivelDre_(row, columns);
-
-  return columns;
-}
-
-
-function LA_encontrarColunaRotuloVisivelDre_(row, columns) {
-  const tecnicas = {};
-
-  [columns.tipo, columns.categoria, columns.subcategoria, columns.classeRelatorio]
-    .forEach(function (column) {
-      if (column) tecnicas[column] = true;
-    });
-
-  for (let index = 0; index < row.length; index++) {
-    const column = index + 1;
-
-    if (tecnicas[column]) continue;
-
-    const value = LA_normalizarTexto_(row[index]);
-
-    if (value && !LA_valorTextoPareceNumeroDre_(value)) {
-      return column;
-    }
+  if (!columns.categoria && !columns.subcategoria) {
+    columns.label = labelByModel;
+    return columns;
   }
 
-  return 0;
+  if (item.subcategoria && !columns.subcategoria) {
+    columns.label =
+      subcategoriaMatch ||
+      LA_encontrarColunaTextoAposDre_(row, columns.categoria) ||
+      (labelByModel !== columns.categoria ? labelByModel : 0);
+  } else {
+    columns.label = labelByModel;
+  }
+
+  return columns;
 }
 
 
@@ -1191,11 +1164,8 @@ function LA_limparValoresNaoFormulaDaLinhaDre_(sheet, row, maxColumns, columns) 
 
 
 function LA_preencherLinhaDre_(sheet, row, columns, item) {
-  // Regra do rótulo visível: usa a Subcategoria; se não houver, usa a Categoria.
   const rotuloVisivel = item.subcategoria || item.categoria;
 
-  // Sempre sobrescreve a coluna descritiva visível com o nome do item criado,
-  // para a nova linha não continuar exibindo o texto da linha-modelo copiada.
   if (columns.label) {
     sheet.getRange(row, columns.label).setValue(rotuloVisivel);
   }
@@ -1210,10 +1180,12 @@ function LA_preencherLinhaDre_(sheet, row, columns, item) {
 
   if (columns.subcategoria) {
     sheet.getRange(row, columns.subcategoria).setValue(item.subcategoria || '');
+  } else if (columns.label && item.subcategoria && columns.label !== columns.categoria) {
+    sheet.getRange(row, columns.label).setValue(item.subcategoria);
   }
 
   if (columns.classeRelatorio) {
-    sheet.getRange(row, columns.classeRelatorio).setValue(item.classeRelatorio);
+    sheet.getRange(row, columns.classeRelatorio).setValue(LA_CLASSE_PADRAO_NOVO_ITEM);
   }
 }
 
@@ -1238,14 +1210,29 @@ function LA_colunasTextoDre_(columns) {
 
 
 function LA_encontrarColunaTextoNaLinhaDre_(row, expected) {
-  const expectedKey = LA_chaveTexto_(expected);
+  const expectedKey = LA_normalizarComparacaoDre_(expected);
 
   if (!expectedKey) return 0;
 
   for (let index = 0; index < row.length; index++) {
-    const cellKey = LA_chaveTexto_(row[index]);
+    const cellKey = LA_normalizarComparacaoDre_(row[index]);
 
     if (cellKey && (cellKey === expectedKey || cellKey.indexOf(expectedKey) !== -1)) {
+      return index + 1;
+    }
+  }
+
+  return 0;
+}
+
+
+function LA_encontrarColunaTextoAposDre_(row, startColumn) {
+  if (!startColumn) return 0;
+
+  for (let index = startColumn; index < row.length; index++) {
+    const value = LA_normalizarTexto_(row[index]);
+
+    if (value && !LA_valorTextoPareceNumeroDre_(value)) {
       return index + 1;
     }
   }
@@ -1275,7 +1262,10 @@ function LA_valorTextoPareceNumeroDre_(value) {
 function LA_colunaOuLinhaContemDre_(row, column, expected) {
   if (!expected) return true;
 
-  if (column && LA_equalsTexto_(row[column - 1], expected)) {
+  if (
+    column &&
+    LA_normalizarComparacaoDre_(row[column - 1]) === LA_normalizarComparacaoDre_(expected)
+  ) {
     return true;
   }
 
@@ -1311,13 +1301,19 @@ function LA_logResultadoInsercaoLoja_(loja, item, status, row, motivo) {
 
 
 function LA_linhaContemTextoDre_(row, expected) {
-  const expectedKey = LA_chaveTexto_(expected);
+  const expectedKey = LA_normalizarComparacaoDre_(expected);
 
   if (!expectedKey) return true;
 
   return row.some(function (cell) {
-    return LA_chaveTexto_(cell).indexOf(expectedKey) !== -1;
+    return LA_normalizarComparacaoDre_(cell).indexOf(expectedKey) !== -1;
   });
+}
+
+
+function LA_normalizarComparacaoDre_(value) {
+  return LA_chaveTexto_(value)
+    .replace(/[^a-z0-9]/g, '');
 }
 
 
@@ -1381,7 +1377,7 @@ function LA_ensureConfigClassHeader_() {
 
     if (!tipo) return;
 
-    const classeAtual = LA_matchClasseRelatorio_(row[5]);
+    const classeAtual = LA_classeRelatorioExistente_(row[5]);
     const classePeloTipo = LA_matchClasseRelatorio_(tipo);
     const novaClasse = classeAtual || classePeloTipo || 'Ignorar';
 
@@ -1459,7 +1455,6 @@ function LA_promptClasseRelatorio_() {
       LA_CLASSES_RELATORIO.join('\n') +
       '\n\n' +
       'Dica:\n' +
-      '- Use "Faturamento" para receitas.\n' +
       '- Use "Despesa" para custos/despesas.\n' +
       '- Use "Ignorar" se esse Tipo não deve afetar os relatórios.',
     ui.ButtonSet.OK_CANCEL
@@ -1939,6 +1934,19 @@ function LA_matchClasseRelatorio_(value) {
   return LA_CLASSES_RELATORIO.find(function (classe) {
     return LA_equalsTexto_(classe, texto);
   }) || '';
+}
+
+
+function LA_classeRelatorioExistente_(value) {
+  const classe = LA_matchClasseRelatorio_(value);
+
+  if (classe) return classe;
+
+  if (LA_equalsTexto_(value, 'Faturamento')) {
+    return 'Faturamento';
+  }
+
+  return '';
 }
 
 

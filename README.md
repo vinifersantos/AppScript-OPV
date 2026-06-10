@@ -68,10 +68,10 @@ O script prioriza o mapa fixo atual do formulário (`B4:B14`) e usa intervalos n
 | T | Lista de Status |
 | U | Lista de Formas de Pagamento |
 
-**Classes de relatório disponíveis na `CONFIG`:**  
-`Faturamento` · `Despesa` · `Ignorar`
+**Classes de relatório disponíveis no fluxo operacional de novos itens:**
+`Despesa` · `Ignorar`
 
-Ao usar **Lançamentos → Adicionar item às listas**, o item é salvo na `CONFIG` e, para classes `Faturamento` ou `Despesa`, o script pergunta se deve refletir a nova linha nas abas de lojas/DRE:
+Ao usar **Lançamentos → Adicionar item às listas**, o item é salvo na `CONFIG` sempre com `ClasseRelatorio = Despesa` e o script pergunta se deve refletir a nova linha nas abas de lojas/DRE:
 
 - `CENTRO`
 - `C. DO MAR`
