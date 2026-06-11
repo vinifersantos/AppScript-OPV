@@ -155,6 +155,9 @@ const LA_INTERVALOS_FORMULARIO = Object.freeze({
 });
 
 const LA_AREA_FORMULARIO_A1 = 'A4:C14';
+const LA_INTERVALO_CAMPOS_FORMULARIO = 'B4:B14';
+const LA_CELULA_TIPO_FORMULARIO = 'B7';
+const LA_CLASSE_PADRAO_FORMULARIO = 'Despesa';
 
 const LA_FORMULARIO_A1 = Object.freeze({
   frmDataLancamento: 'B4',
@@ -541,9 +544,10 @@ function limparFormulario() {
 
 function LA_limparFormulario_() {
   const ss = SpreadsheetApp.getActive();
-  LA_obterAbaObrigatoria_(ss, LA_ABA_LANCAMENTOS)
-    .getRange(LA_AREA_FORMULARIO_A1)
-    .clearContent();
+  const sheet = LA_obterAbaObrigatoria_(ss, LA_ABA_LANCAMENTOS);
+  sheet.getRange(LA_INTERVALO_CAMPOS_FORMULARIO).clearContent();
+  sheet.getRange(LA_CELULA_TIPO_FORMULARIO).setValue(LA_CLASSE_PADRAO_FORMULARIO);
+  ss.toast('Formulário limpo.', 'LANÇAMENTOS', 3);
 }
 
 
